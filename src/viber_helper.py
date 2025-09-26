@@ -1,25 +1,18 @@
-# viber_auto_sender.py
 import subprocess
 import time
 import logging
-import sys
 from pywinauto import Application, findwindows, keyboard
-import pygetwindow as gw
 import ctypes
 from ctypes import wintypes
 
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # === Config ===
 VIBER_EXE_PATH = r"C:\Users\anhnv\AppData\Local\Viber\Viber.exe"  # <-- edit
-GROUP_NAME = "Test group"
-MESSAGE = "Automated message (test) ✅"
-SEND_INTERVAL = 60  # seconds
 
 # === Win32 helpers for bringing windows front/back more reliably ===
-user32 = ctypes.WinDLL('user32', use_last_error=True)
-kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 GetForegroundWindow = user32.GetForegroundWindow
 GetForegroundWindow.restype = wintypes.HWND
@@ -46,6 +39,7 @@ GetCurrentThreadId.restype = wintypes.DWORD
 SW_SHOW = 5
 SW_RESTORE = 9
 
+
 def bring_window_to_front(hwnd):
     """Try to reliably bring window hwnd to the foreground (may still fail due to OS rules)."""
     if not hwnd:
@@ -71,6 +65,7 @@ def bring_window_to_front(hwnd):
         logging.debug("bring_window_to_front failed: %s", e)
         return False
 
+
 def get_viber_window():
     """Return the top-level hwnd and pywinauto window wrapper of Viber, or (None, None)."""
     # try to find an open Viber window by title containing "Viber"
@@ -87,6 +82,7 @@ def get_viber_window():
         logging.debug("get_viber_window exception: %s", e)
         return None, None
 
+
 def start_viber():
     logging.info("Starting Viber...")
     subprocess.Popen(VIBER_EXE_PATH)
@@ -97,7 +93,10 @@ def start_viber():
             logging.info("Viber window detected.")
             return hwnd, win
         time.sleep(1)
-    raise RuntimeError("Viber window did not appear in time. Check VIBER_EXE_PATH and that Viber can start.")
+    raise RuntimeError(
+        "Viber window did not appear in time. Check VIBER_EXE_PATH and that Viber can start."
+    )
+
 
 def send_to_group(window, group_name, messages):
     """
@@ -107,7 +106,6 @@ def send_to_group(window, group_name, messages):
     3) Click the first result in the sidebar (by coordinates),
     4) Type the message and send.
     """
-    from pywinauto import keyboard
     import time
 
     # Save current foreground
@@ -126,13 +124,12 @@ def send_to_group(window, group_name, messages):
     time.sleep(1)  # wait for results to show
 
     # --- Step 3: Click the first conversation result ---
-    rect = window.rectangle()
     x = 60
     y = 200
     window.click_input(coords=(x, y))
     time.sleep(1)  # wait for chat to open
 
-    # 
+    #
     x = 400
     y = 200
     window.click_input(coords=(x, y))
@@ -146,51 +143,12 @@ def send_to_group(window, group_name, messages):
     for message in messages:
         keyboard.send_keys(message, with_spaces=True, pause=0.05)
         keyboard.send_keys("+{ENTER}")
-    keyboard.send_keys("{ENTER}")
+    # keyboard.send_keys("{ENTER}")
     print(f"✅ Sent message to group: {group_name}")
+
 
 def ensure_viber_running():
     hwnd, win = get_viber_window()
     if hwnd and win:
         return hwnd, win
     return start_viber()
-
-def main_loop():
-    logging.info("Starting main loop. Press Ctrl+C to stop.")
-    from FlightRadar24 import FlightRadar24API
-    client = FlightRadar24API()
-    try:
-        # ensure Viber running
-        hwnd, win = ensure_viber_running()
-        while True:
-            # double-check window still present
-            hwnd, win = get_viber_window()
-            if not hwnd:
-                logging.warning("Viber window lost. Trying to start/connect again...")
-                hwnd, win = ensure_viber_running()
-
-            # Attempt to send
-            try:
-                flights = client.get_flights(airline="HVN", registration="VN-A331", details=True)
-                messages = ["VN-A331 registration not found on FlightRadar24 currently."]
-                if len(flights) > 0:
-                    flight = flights[0]
-                    messages = [f"Flight {flight.callsign}", f"From: {flight.origin_airport_name}, To: {flight.destination_airport_name}", f"Altitude: {flight.altitude} ft, Speed: {flight.ground_speed} kts"]
-
-                send_to_group(win, GROUP_NAME, messages)
-            except Exception as e:
-                logging.exception("send_to_group exception: %s", e)
-
-            # wait interval
-            time.sleep(SEND_INTERVAL)
-    except KeyboardInterrupt:
-        logging.info("Interrupted by user. Exiting.")
-        sys.exit(0)
-    except Exception:
-        logging.exception("Unhandled exception in main_loop.")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main_loop()
-
-    
