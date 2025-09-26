@@ -1,0 +1,13 @@
+Brotli==1.1.0
+certifi==2025.8.3
+charset-normalizer==3.4.3
+comtypes==1.4.12
+FlightRadarAPI==1.4.0
+idna==3.10
+PyGetWindow==0.0.9
+PyRect==0.2.0
+pywin32==311
+pywinauto==0.6.9
+requests==2.32.5
+six==1.17.0
+urllib3==2.5.0
