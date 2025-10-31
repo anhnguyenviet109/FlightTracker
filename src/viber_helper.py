@@ -98,11 +98,11 @@ def start_viber():
     )
 
 
-def send_to_group(window, group_name, messages):
+def send_message(window, group_or_phone_number: str, messages: list[str], dry_run=True):
     """
     Steps:
     1) Focus the search input,
-    2) Type the group name,
+    2) Type the group name or phone number,
     3) Click the first result in the sidebar (by coordinates),
     4) Type the message and send.
     """
@@ -120,7 +120,7 @@ def send_to_group(window, group_name, messages):
     keyboard.send_keys("{DEL}")
 
     # --- Step 2: Type the group name ---
-    keyboard.send_keys(group_name, with_spaces=True, pause=0.05)
+    keyboard.send_keys(group_or_phone_number, with_spaces=True, pause=0.05)
     time.sleep(1)  # wait for results to show
 
     # --- Step 3: Click the first conversation result ---
@@ -139,12 +139,16 @@ def send_to_group(window, group_name, messages):
     keyboard.send_keys("^a")
     keyboard.send_keys("{DEL}")
 
-    # send the message
+    # prepare the message in the chat box
     for message in messages:
-        keyboard.send_keys(message, with_spaces=True, pause=0.05)
+        keyboard.send_keys(message, with_spaces=True, pause=0.01)
         keyboard.send_keys("+{ENTER}")
-    # keyboard.send_keys("{ENTER}")
-    print(f"✅ Sent message to group: {group_name}")
+
+    if dry_run:
+        print("\n".join(messages))
+    else:
+        keyboard.send_keys("{ENTER}")
+    print(f"✅ Sent message to '{group_or_phone_number}'")
 
 
 def ensure_viber_running():
@@ -152,3 +156,17 @@ def ensure_viber_running():
     if hwnd and win:
         return hwnd, win
     return start_viber()
+
+
+def send_viber_message(
+    group_or_phone_number: str, messages: list[str], dry_run: bool = True
+):
+    hwnd, win = get_viber_window()
+    if not hwnd:
+        logging.warning("Viber window lost. Trying to start/connect again...")
+        hwnd, win = ensure_viber_running()
+
+    try:
+        send_message(win, group_or_phone_number, messages, dry_run=dry_run)
+    except Exception as e:
+        logging.exception("Failed to send Viber message")
