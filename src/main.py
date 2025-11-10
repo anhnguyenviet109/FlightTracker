@@ -7,12 +7,19 @@ from FlightRadar24 import FlightRadar24API
 import datetime
 import pandas as pd
 import os
-import random
+
+logging.basicConfig(
+    level=logging.INFO, 
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.FileHandler(".temp/app.log", mode='a'),
+        logging.StreamHandler()  
+    ]
+)
 
 GROUP_NAME = "Test group"
 PHONE_NUMBER = "0913433867"
 THRESHOLD_BEFORE_ARRIVAL_IN_MINS = 15
-FLIGHT_DATA_EXPIRATION = 30
 
 client = FlightRadar24API()
 
@@ -23,47 +30,70 @@ def utc_now():
     return datetime.datetime.now(UTC)
 
 
-class EstimatedArrivalTimeManager:
+class FlightNotificationTracker:
     def __init__(self):
         self.directory = ".temp"
-        self.file_name = "estimated_arrival.txt"
+        self.file_name = "notified_flights.txt"
         self.file_path = os.path.join(self.directory, self.file_name)
 
-    def get(self) -> datetime:
+    def sync(self, available_registrations: list[str]):
+        if available_registrations is None:
+            return
+
+        existing_values = self.get()
+        updated_values = [
+            value for value in existing_values if value in available_registrations
+        ]
+
+        tobe_removed = set(existing_values) - set(updated_values)
+        if len(tobe_removed) > 0:
+            for toberemoved in tobe_removed:
+                logging.info(
+                    "Removing notified flight %s as it is no longer available on FlightRadar24",
+                    toberemoved,
+                )
+
+        self.save(updated_values)
+
+    def get(self) -> list[str]:
         try:
             with open(self.file_path, "r") as f:
                 value = f.read().strip()
-                iso_date_time = datetime.datetime.fromisoformat(value)
-                logging.info("Loaded estimated arrival date time %s", value)
-                return iso_date_time
+                return [val for val in value.split(",") if val]
         except Exception:
-            logging.exception("Unable to parse estimated arrival date time")
+            logging.exception("Unable to read notified flights")
+            return []
 
-        logging.info(
-            "Not found '%s', fallback to default estimated arrival date time",
-            self.file_path,
-        )
-        return utc_now() + datetime.timedelta(hours=12)
+    def track(self, values: list[str]) -> bool:
+        existing_values = self.get()
+        new_values = set(values) - set(existing_values)
+        self.save(existing_values + list(new_values))
+        if len(new_values) > 0:
+            logging.info("The flight registration(s): %s have been saved as the notifications have been sent.", ", ".join(new_values))
 
-    def save(self, value: datetime):
-        now = utc_now()
-        valid_estimated = now if value < now else value
+    def save(self, values: list[str]):
         os.makedirs(self.directory, exist_ok=True)
         with open(self.file_path, "w") as f:
-            f.write(valid_estimated.isoformat())
+            f.write(",".join(values))
 
 
-def get_registrations_from_excel():
+def get_flight_schedules():
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    relative_path = os.path.join(script_dir, "../resources/Flight schedule.xlsx")
+    relative_path = os.path.join(script_dir, "../resources/Flightschedule.xlsx")
     abs_path = os.path.abspath(relative_path)
 
     excel_sheet = pd.read_excel(abs_path, sheet_name=0)
-    return [
-        item.replace("VN", "VN-")
-        for item in excel_sheet.iloc[:, 1].tolist()
-        if isinstance(item, str) and item.startswith("VN")
-    ]
+    results = []
+    for i in range(len(excel_sheet)):
+        registration = excel_sheet.iloc[i, 0]
+        owner = excel_sheet.iloc[i, 8]
+        if isinstance(registration, str):
+            results.append((registration, owner))
+    return results
+
+
+def normalize_registration(registration: str) -> str:
+    return registration.strip().replace("VN", "VN-")
 
 
 class FlightFetcher:
@@ -73,59 +103,66 @@ class FlightFetcher:
         self.client = FlightRadar24API()
 
     def get_tracking_flights(self):
-        """
-        Refetch flights after 30 minutes to get the latest updates
-        """
-        now = utc_now()
-        should_fetch = (
-            (
-                self.last_fetched_flights
-                < now - datetime.timedelta(minutes=FLIGHT_DATA_EXPIRATION)
-            )
-            if len(self.flights) > 0
-            else now - datetime.timedelta(minutes=5)
-        )
-        if not should_fetch:
-            return self.flights
-
-        self.flights = [
-            flight
-            for flight in self.client.get_flights(airline="HVN", details=False)
-            if flight.registration in get_registrations_from_excel()
-            and flight.altitude > 0 and flight.altitude < 10_000
+        normalized_registrations = [
+            normalize_registration(item[0]) for item in get_flight_schedules()
         ]
-        self.last_fetched_flights = now
-        return self.flights
+        flights = self.client.get_flights(airline="HVN", details=False)
+        matched_flights = [
+            flight
+            for flight in flights
+            if flight.registration in normalized_registrations
+            and flight.destination_airport_iata == "HAN"
+        ]
+        for flight in matched_flights:
+            logging.info(
+                "Matched flight: %s, Registration: %s, From: %s, To: %s, Altitude: %s ft",
+                flight.callsign,
+                flight.registration,
+                flight.origin_airport_iata,
+                flight.destination_airport_iata,
+                flight.altitude,
+            )
+        return matched_flights
 
 
 if __name__ == "__main__":
     logging.info("Starting service")
     try:
+        flight_notification_tracker = FlightNotificationTracker()
         hwnd, win = ensure_viber_running()
         flight_fetcher = FlightFetcher()
-        estimated_arrival_time_manager = EstimatedArrivalTimeManager()
+        flight_schedules = get_flight_schedules()
         while True:
-            min_estimated_arrival_date_time = estimated_arrival_time_manager.get()
-            if (
-                utc_now() < min_estimated_arrival_date_time
-                and len(flight_fetcher.flights) > 0
-            ):
-                sleep_in_seconds = random.randint(10, 15)
-                logging.info(
-                    "Wait until %s for tracking before landing. Sleep in %s seconds",
-                    min_estimated_arrival_date_time,
-                    sleep_in_seconds,
-                )
-                time.sleep(sleep_in_seconds)
+            flights = flight_fetcher.get_tracking_flights()
+            flight_notification_tracker.sync(
+                [flight.registration for flight in flights]
+            )
+            landing_flights = [
+                flight
+                for flight in flights
+                if flight.altitude > 0 and flight.altitude < 10_000
+            ]
+            if len(landing_flights) == 0:
+                logging.info("No landing flight found. Retrying in 1 minute.")
+                time.sleep(60 * 1)
                 continue
 
-            tracking_flights = flight_fetcher.get_tracking_flights()
             flight_descriptions = [
-                f"Found {len(tracking_flights)} flight(s) on FlightRadar24 based on the flight schedule.",
+                f"Found {len(landing_flights)} flight(s) on FlightRadar24 based on the flight schedule.",
                 "-------------------------------------------------------------------------------------",
             ]
             earliest_estimated_arrival_registration = None
-            for flight in tracking_flights:
+            notified_flights = flight_notification_tracker.get()
+            tracking_registrations = []
+            for flight in landing_flights:
+                if flight.registration in notified_flights:
+                    logging.info(
+                        "Flight %s - %s has been notified before. Skipping.",
+                        flight.callsign,
+                        flight.registration,
+                    )
+                    continue
+
                 flights = client.get_flights(
                     airline="HVN", registration=flight.registration, details=True
                 )
@@ -134,52 +171,67 @@ if __name__ == "__main__":
                 ]
                 if len(flights) > 0:
                     flight = flights[0]
-                    descriptions = [
-                        f"Flight {flight.callsign}",
-                        f"Registration {flight.registration}",
-                        f"From: {flight.origin_airport_name}, To: {flight.destination_airport_name}",
-                        f"Altitude: {flight.altitude} ft, Speed: {flight.ground_speed} kts",
+                    flight_schedule = next(
+                        (
+                            entry
+                            for entry in flight_schedules
+                            if normalize_registration(entry[0]) == flight.registration
+                        ),
+                        None,
+                    )
+                    descriptions = []
+                    owner = flight_schedule[1]
+                    # if owner:
+                    #     descriptions.append(f"@{owner}")
+
+                    descriptions = descriptions + [
+                        f"Flight *{flight.callsign}*",
+                        f"Registration *{flight.registration}*",
+                        f"From: *{flight.origin_airport_name}*, To: {flight.destination_airport_name}",
+                        f"Altitude: *{flight.altitude}* ft, Speed: *{flight.ground_speed}* kts",
                     ]
                     estimated_arrival_time = flight.time_details.get(
                         "estimated", {}
                     ).get("arrival")
                     if not estimated_arrival_time:
-                        descriptions.append("Estimate time arrival is not found.")
+                        logging.info(
+                            "Flight %s - %s has no estimated arrival time. Skipping notification.",
+                            flight.callsign,
+                            flight.registration,
+                        )
                         continue
 
                     eta = datetime.datetime.fromtimestamp(
                         estimated_arrival_time
-                    ).replace(tzinfo=datetime.UTC)
-                    if eta <= min_estimated_arrival_date_time:
-                        min_estimated_arrival_date_time = eta
-                        earliest_estimated_arrival_registration = flight.registration
-
-                    remaining = eta - utc_now()
+                    ).replace(second=0, microsecond=0)
+                    remaining = eta - datetime.datetime.now().replace(
+                        second=0, microsecond=0
+                    )
                     total_seconds = int(remaining.total_seconds())
                     hours, remainder = divmod(total_seconds, 3600)
                     minutes, _ = divmod(remainder, 60)
+                    if minutes > THRESHOLD_BEFORE_ARRIVAL_IN_MINS:
+                        logging.info(
+                            "Flight %s - %s arrival in %02d hour(s) %02d minute(s), which is more than threshold %d minutes. Skipping notification.",
+                            flight.callsign,
+                            flight.registration,
+                            hours,
+                            minutes,
+                            THRESHOLD_BEFORE_ARRIVAL_IN_MINS,
+                        )
+                        continue
+
                     descriptions.append(
-                        f"Estimate time arrival: {eta.strftime('%Y-%m-%d %H:%M:%S UTC')}, Time remaining: {hours:02d}:{minutes:02d}"
+                        f"Estimate time arrival: *{eta.strftime('%Y-%m-%d %H:%M')}*, Time remaining: *{minutes:02d} mins*"
                     )
-                flight_descriptions += descriptions
-                flight_descriptions.append(
-                    "-------------------------------------------------------------------------------------"
-                )
+                    print("\n".join(descriptions))
+                    # send_viber_message(GROUP_NAME, descriptions, False)
+                    tracking_registrations.append(flight.registration)
 
-            estimated_arrival_time_manager.save(
-                min_estimated_arrival_date_time
-                - datetime.timedelta(minutes=THRESHOLD_BEFORE_ARRIVAL_IN_MINS)
-            )
-            flight_descriptions.append(
-                f"* Earliest estimated arrival: {earliest_estimated_arrival_registration} - {min_estimated_arrival_date_time.strftime('%Y-%m-%d %H:%M:%S UTC')}"
-            )
-            flight_descriptions.append(
-                f"* Will be back to update until {min_estimated_arrival_date_time.strftime('%Y-%m-%d %H:%M:%S UTC')}"
-            )
-
-            print("\n".join(flight_descriptions))
-            # send_viber_message(GROUP_NAME, flight_descriptions, True)
-            # send_viber_message(PHONE_NUMBER, flight_descriptions, True)
+            flight_notification_tracker.track(tracking_registrations)
+            tracking_registrations.clear()
+            logging.info("Sleeping for 1 min before next check...")
+            time.sleep(60 * 1)
     except KeyboardInterrupt:
         logging.info("Interrupted by user. Exiting.")
         sys.exit(0)

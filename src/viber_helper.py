@@ -5,8 +5,6 @@ from pywinauto import Application, findwindows, keyboard
 import ctypes
 from ctypes import wintypes
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
 # === Config ===
 VIBER_EXE_PATH = r"C:\Users\anhnv\AppData\Local\Viber\Viber.exe"  # <-- edit
 
