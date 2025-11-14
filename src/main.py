@@ -88,10 +88,19 @@ def get_flight_schedules():
     results = []
     for i in range(len(excel_sheet)):
         registration = excel_sheet.iloc[i, 2]
+        arrival_number = excel_sheet.iloc[i, 4]
         owner = excel_sheet.iloc[i, 13]
-        arrival_owner = ", ".join(("" if pd.isna(owner) else owner).split(";"))
+        arrival_owner = ", ".join(
+            [x for x in ("" if pd.isna(owner) else owner).split(";") if x]
+        )
         if isinstance(registration, str):
-            results.append((registration, arrival_owner))
+            results.append(
+                {
+                    "registration": registration,
+                    "arrival_number": arrival_number,
+                    "arrival_owner": arrival_owner,
+                }
+            )
     return results
 
 
@@ -107,7 +116,8 @@ class FlightFetcher:
 
     def get_tracking_flights(self):
         normalized_registrations = [
-            normalize_registration(item[0]) for item in get_flight_schedules()
+            normalize_registration(item["registration"])
+            for item in get_flight_schedules()
         ]
         flights = self.client.get_flights(airline="HVN", details=False)
         matched_flights = [
@@ -143,7 +153,8 @@ if __name__ == "__main__":
             landing_flights = [
                 flight
                 for flight in flights
-                if flight.altitude > 0 and flight.altitude < MAX_ALTITUDE_BEFORE_LANDING_IN_FT
+                if flight.altitude > 0
+                and flight.altitude < MAX_ALTITUDE_BEFORE_LANDING_IN_FT
             ]
             if len(landing_flights) == 0:
                 logging.info("No landing flight found. Retrying in 1 minute.")
@@ -178,12 +189,24 @@ if __name__ == "__main__":
                         (
                             entry
                             for entry in flight_schedules
-                            if normalize_registration(entry[0]) == flight.registration
+                            if normalize_registration(entry["registration"])
+                            == flight.registration
+                            and entry["arrival_number"] == flight.number
                         ),
                         None,
                     )
+
+                    if not flight_schedule:
+                        logging.info(
+                            "Flight %s [registration=%s, arrival_number=%s] not found in flight schedule. Skipping notification.",
+                            flight.callsign,
+                            flight.registration,
+                            flight.number
+                        )
+                        continue
+
                     descriptions = []
-                    owner = flight_schedule[1]
+                    owner = flight_schedule["arrival_owner"]
                     if owner:
                         descriptions.append(f"{owner}")
 
@@ -194,7 +217,7 @@ if __name__ == "__main__":
                         f"From: *{flight.origin_airport_name}*, To: {flight.destination_airport_name}",
                         f"Altitude: *{flight.altitude}* ft, Speed: *{flight.ground_speed}* kts",
                     ]
-            
+
                     real_departure_value = flight.time_details.get("real", {}).get(
                         "departure"
                     )
@@ -206,23 +229,25 @@ if __name__ == "__main__":
                         )
                         continue
 
-                    now = datetime.datetime.now().replace(
-                        second=0, microsecond=0
+                    now = datetime.datetime.now().replace(second=0, microsecond=0)
+                    departure_datetime = datetime.datetime.fromtimestamp(
+                        real_departure_value
                     )
-                    departure_datetime = datetime.datetime.fromtimestamp(real_departure_value)
                     departure_delta = now - departure_datetime.replace(
                         second=0, microsecond=0
                     )
-                    departure_in_minutes, _ = divmod(departure_delta.total_seconds(), 60)
+                    departure_in_minutes, _ = divmod(
+                        departure_delta.total_seconds(), 60
+                    )
                     if departure_in_minutes < THRESHOLD_AFTER_DEPARTURE_IN_MINS:
                         minutes, _ = divmod(departure_delta.total_seconds(), 60)
                         logging.info(
                             "Flight %s - %s has departed in %s less than %s minutes (%s). Skipping notification.",
                             flight.callsign,
                             flight.registration,
-                            departure_datetime.strftime('%Y-%m-%d %H:%M'),
+                            departure_datetime.strftime("%Y-%m-%d %H:%M"),
                             THRESHOLD_AFTER_DEPARTURE_IN_MINS,
-                            departure_in_minutes
+                            departure_in_minutes,
                         )
                         continue
 
