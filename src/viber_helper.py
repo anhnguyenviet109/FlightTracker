@@ -128,7 +128,7 @@ def send_message(window, group_or_phone_number: str, messages: list[str], dry_ru
     time.sleep(1)  # wait for chat to open
 
     #
-    x = 400
+    x = 320
     y = 200
     window.click_input(coords=(x, y))
     time.sleep(0.8)  # wait for chat to open

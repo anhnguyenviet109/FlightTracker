@@ -9,17 +9,16 @@ import pandas as pd
 import os
 
 logging.basicConfig(
-    level=logging.INFO, 
+    level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
-    handlers=[
-        logging.FileHandler(".temp/app.log", mode='a'),
-        logging.StreamHandler()  
-    ]
+    handlers=[logging.FileHandler(".temp/app.log", mode="a"), logging.StreamHandler()],
 )
 
 GROUP_NAME = "Test group"
 PHONE_NUMBER = "0913433867"
 THRESHOLD_BEFORE_ARRIVAL_IN_MINS = 15
+THRESHOLD_AFTER_DEPARTURE_IN_MINS = 30
+MAX_ALTITUDE_BEFORE_LANDING_IN_FT = 15_000  # in feet
 
 client = FlightRadar24API()
 
@@ -69,7 +68,10 @@ class FlightNotificationTracker:
         new_values = set(values) - set(existing_values)
         self.save(existing_values + list(new_values))
         if len(new_values) > 0:
-            logging.info("The flight registration(s): %s have been saved as the notifications have been sent.", ", ".join(new_values))
+            logging.info(
+                "The flight registration(s): %s have been saved as the notifications have been sent.",
+                ", ".join(new_values),
+            )
 
     def save(self, values: list[str]):
         os.makedirs(self.directory, exist_ok=True)
@@ -85,10 +87,11 @@ def get_flight_schedules():
     excel_sheet = pd.read_excel(abs_path, sheet_name=0)
     results = []
     for i in range(len(excel_sheet)):
-        registration = excel_sheet.iloc[i, 0]
-        owner = excel_sheet.iloc[i, 8]
+        registration = excel_sheet.iloc[i, 2]
+        owner = excel_sheet.iloc[i, 13]
+        arrival_owner = ", ".join(("" if pd.isna(owner) else owner).split(";"))
         if isinstance(registration, str):
-            results.append((registration, owner))
+            results.append((registration, arrival_owner))
     return results
 
 
@@ -131,8 +134,8 @@ if __name__ == "__main__":
         flight_notification_tracker = FlightNotificationTracker()
         hwnd, win = ensure_viber_running()
         flight_fetcher = FlightFetcher()
-        flight_schedules = get_flight_schedules()
         while True:
+            flight_schedules = get_flight_schedules()
             flights = flight_fetcher.get_tracking_flights()
             flight_notification_tracker.sync(
                 [flight.registration for flight in flights]
@@ -140,7 +143,7 @@ if __name__ == "__main__":
             landing_flights = [
                 flight
                 for flight in flights
-                if flight.altitude > 0 and flight.altitude < 10_000
+                if flight.altitude > 0 and flight.altitude < MAX_ALTITUDE_BEFORE_LANDING_IN_FT
             ]
             if len(landing_flights) == 0:
                 logging.info("No landing flight found. Retrying in 1 minute.")
@@ -181,15 +184,48 @@ if __name__ == "__main__":
                     )
                     descriptions = []
                     owner = flight_schedule[1]
-                    # if owner:
-                    #     descriptions.append(f"@{owner}")
+                    if owner:
+                        descriptions.append(f"{owner}")
 
                     descriptions = descriptions + [
-                        f"Flight *{flight.callsign}*",
-                        f"Registration *{flight.registration}*",
+                        f"Flight: *{flight.callsign}*",
+                        f"Number: *{flight.number}*",
+                        f"Registration: *{flight.registration}*",
                         f"From: *{flight.origin_airport_name}*, To: {flight.destination_airport_name}",
                         f"Altitude: *{flight.altitude}* ft, Speed: *{flight.ground_speed}* kts",
                     ]
+            
+                    real_departure_value = flight.time_details.get("real", {}).get(
+                        "departure"
+                    )
+                    if not real_departure_value:
+                        logging.info(
+                            "Flight %s - %s has no real departure time. Skipping notification.",
+                            flight.callsign,
+                            flight.registration,
+                        )
+                        continue
+
+                    now = datetime.datetime.now().replace(
+                        second=0, microsecond=0
+                    )
+                    departure_datetime = datetime.datetime.fromtimestamp(real_departure_value)
+                    departure_delta = now - departure_datetime.replace(
+                        second=0, microsecond=0
+                    )
+                    departure_in_minutes, _ = divmod(departure_delta.total_seconds(), 60)
+                    if departure_in_minutes < THRESHOLD_AFTER_DEPARTURE_IN_MINS:
+                        minutes, _ = divmod(departure_delta.total_seconds(), 60)
+                        logging.info(
+                            "Flight %s - %s has departed in %s less than %s minutes (%s). Skipping notification.",
+                            flight.callsign,
+                            flight.registration,
+                            departure_datetime.strftime('%Y-%m-%d %H:%M'),
+                            THRESHOLD_AFTER_DEPARTURE_IN_MINS,
+                            departure_in_minutes
+                        )
+                        continue
+
                     estimated_arrival_time = flight.time_details.get(
                         "estimated", {}
                     ).get("arrival")
@@ -200,15 +236,11 @@ if __name__ == "__main__":
                             flight.registration,
                         )
                         continue
-
-                    eta = datetime.datetime.fromtimestamp(
+                    estimated_arrival = datetime.datetime.fromtimestamp(
                         estimated_arrival_time
                     ).replace(second=0, microsecond=0)
-                    remaining = eta - datetime.datetime.now().replace(
-                        second=0, microsecond=0
-                    )
-                    total_seconds = int(remaining.total_seconds())
-                    hours, remainder = divmod(total_seconds, 3600)
+                    remaining_seconds = int((estimated_arrival - now).total_seconds())
+                    hours, remainder = divmod(remaining_seconds, 3600)
                     minutes, _ = divmod(remainder, 60)
                     if minutes > THRESHOLD_BEFORE_ARRIVAL_IN_MINS:
                         logging.info(
@@ -219,13 +251,13 @@ if __name__ == "__main__":
                             minutes,
                             THRESHOLD_BEFORE_ARRIVAL_IN_MINS,
                         )
-                        continue
+                        # continue
 
                     descriptions.append(
-                        f"Estimate time arrival: *{eta.strftime('%Y-%m-%d %H:%M')}*, Time remaining: *{minutes:02d} mins*"
+                        f"Estimate time arrival: *{estimated_arrival.strftime('%Y-%m-%d %H:%M')}*, Time remaining: *{minutes:02d} mins*"
                     )
                     print("\n".join(descriptions))
-                    # send_viber_message(GROUP_NAME, descriptions, False)
+                    send_viber_message(GROUP_NAME, descriptions, True)
                     tracking_registrations.append(flight.registration)
 
             flight_notification_tracker.track(tracking_registrations)
