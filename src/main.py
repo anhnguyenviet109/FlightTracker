@@ -101,6 +101,14 @@ def get_flight_schedules():
                     "arrival_owner": arrival_owner,
                 }
             )
+
+            logging.info(
+                "Loaded flight schedule: Registration=%s, ArrivalNumber=%s, ArrivalOwner=%s",
+                registration,
+                arrival_number,
+                arrival_owner,
+            )
+
     return results
 
 
@@ -128,9 +136,10 @@ class FlightFetcher:
         ]
         for flight in matched_flights:
             logging.info(
-                "Matched flight: %s, Registration: %s, From: %s, To: %s, Altitude: %s ft",
+                "Matched flight: %s, Registration: %s, ArrivalNumber: %s,  From: %s, To: %s, Altitude: %s ft",
                 flight.callsign,
                 flight.registration,
+                flight.number,
                 flight.origin_airport_iata,
                 flight.destination_airport_iata,
                 flight.altitude,
@@ -201,7 +210,7 @@ if __name__ == "__main__":
                             "Flight %s [registration=%s, arrival_number=%s] not found in flight schedule. Skipping notification.",
                             flight.callsign,
                             flight.registration,
-                            flight.number
+                            flight.number,
                         )
                         continue
 
