@@ -16,7 +16,7 @@ logging.basicConfig(
 )
 
 GROUP_NAME = "Team 4 HANLINE"
-GOOGLE_DRIVE_FLIGHT_SCHEDULE = "G:\\My Drive\\FlightSchedule\\Flightschedule.xlsx"
+GOOGLE_DRIVE_FLIGHT_SCHEDULE = "G:\\My Drive\\FlightSchedule\\VnaFlightSchedule.xlsx"
 THRESHOLD_BEFORE_ARRIVAL_IN_MINS = 20
 THRESHOLD_AFTER_DEPARTURE_IN_MINS = 30
 MAX_ALTITUDE_BEFORE_LANDING_IN_FT = 18_000  # in feet
@@ -84,7 +84,7 @@ def get_flight_schedule_filepath() -> str:
         path = GOOGLE_DRIVE_FLIGHT_SCHEDULE
     else:
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        default_flight_schedule_path = os.path.join(script_dir, "../resources/Flightschedule.xlsx")
+        default_flight_schedule_path = os.path.join(script_dir, "../resources/VnaFlightSchedule.xlsx")
         path = os.path.abspath(default_flight_schedule_path)
 
     logging.info("Reading %s", path)
@@ -309,7 +309,7 @@ if __name__ == "__main__":
                         f"Estimate time arrival: *{estimated_arrival.strftime('%Y-%m-%d %H:%M')}*, Time remaining: *{minutes:02d} mins*"
                     )
                     print("\n".join(descriptions))
-                    # send_viber_message(GROUP_NAME, descriptions, False)
+                    send_viber_message(GROUP_NAME, descriptions, False)
                     tracking_registrations.append(flight.registration)
 
             flight_notification_tracker.track(tracking_registrations)
