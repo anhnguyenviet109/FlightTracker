@@ -6,7 +6,7 @@ import ctypes
 from ctypes import wintypes
 
 # === Config ===
-VIBER_EXE_PATH = r"C:\Users\anhnv\AppData\Local\Viber\Viber.exe"  # <-- edit
+VIBER_EXE_PATH = r"C:\Users\DucThang\AppData\Local\Viber\Viber.exe"  # <-- edit
 
 # === Win32 helpers for bringing windows front/back more reliably ===
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -152,7 +152,10 @@ def send_message(window, group_or_phone_number: str, messages: list[str], dry_ru
 def ensure_viber_running():
     hwnd, win = get_viber_window()
     if hwnd and win:
+        logging.info("Found Viber window hwnd: %s, win: %s", hwnd, win)
         return hwnd, win
+    
+    logging.info("Not found Viber window hwnd: %s, win: %s", hwnd, win)
     return start_viber()
 
 
@@ -166,5 +169,5 @@ def send_viber_message(
 
     try:
         send_message(win, group_or_phone_number, messages, dry_run=dry_run)
-    except Exception as e:
+    except Exception:
         logging.exception("Failed to send Viber message")

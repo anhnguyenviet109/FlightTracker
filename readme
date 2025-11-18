@@ -1,0 +1,19 @@
+1. Installations
+Install Microsoft Visual C++ Redistributable by the link below // Cai dat Microsoft Visual C++
+https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170
+Install python with version >= 3.14 // Cai dat python 3.14 hoac cao hon
+Install Viber desktop // Cai dat Viber
+
+2. Ensure pip is available by executing command:  // Cai dat pip neu chua co hoac cap nhat pip ban moi nhat
+`python -m pip install --upgrade pip`
+
+3. Create virtual environment by executing command: // Tao moi truong ao
+`python -m venv venv`
+
+4. Install dependencies // Cai dat thu vien can thiet cho chuong trinh
+- Open project directory
+- Double clicks on `install_dependencies.bat` to install all dependencies (libraries)
+
+5. Execute the bot // Chay bot
+- Before executing bot, ensure the viber is closed and reopen again
+- Double clicks on `run.bat`

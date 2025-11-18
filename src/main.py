@@ -7,6 +7,7 @@ from FlightRadar24 import FlightRadar24API
 import datetime
 import pandas as pd
 import os
+import requests
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,11 +15,11 @@ logging.basicConfig(
     handlers=[logging.FileHandler(".temp/app.log", mode="a"), logging.StreamHandler()],
 )
 
-GROUP_NAME = "Test group"
-PHONE_NUMBER = "0913433867"
-THRESHOLD_BEFORE_ARRIVAL_IN_MINS = 15
+GROUP_NAME = "Team 4 HANLINE"
+GOOGLE_DRIVE_FLIGHT_SCHEDULE = "G:\\My Drive\\FlightSchedule\\Flightschedule.xlsx"
+THRESHOLD_BEFORE_ARRIVAL_IN_MINS = 20
 THRESHOLD_AFTER_DEPARTURE_IN_MINS = 30
-MAX_ALTITUDE_BEFORE_LANDING_IN_FT = 15_000  # in feet
+MAX_ALTITUDE_BEFORE_LANDING_IN_FT = 18_000  # in feet
 
 client = FlightRadar24API()
 
@@ -78,17 +79,24 @@ class FlightNotificationTracker:
         with open(self.file_path, "w") as f:
             f.write(",".join(values))
 
+def get_flight_schedule_filepath() -> str:
+    if os.path.exists(GOOGLE_DRIVE_FLIGHT_SCHEDULE):
+        path = GOOGLE_DRIVE_FLIGHT_SCHEDULE
+    else:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        default_flight_schedule_path = os.path.join(script_dir, "../resources/Flightschedule.xlsx")
+        path = os.path.abspath(default_flight_schedule_path)
 
-def get_flight_schedules():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    relative_path = os.path.join(script_dir, "../resources/Flightschedule.xlsx")
-    abs_path = os.path.abspath(relative_path)
+    logging.info("Reading %s", path)
+    return path
 
-    excel_sheet = pd.read_excel(abs_path, sheet_name=0)
+def get_flight_schedules(path: str):
+    excel_sheet = pd.read_excel(path, sheet_name=0)
     results = []
     for i in range(len(excel_sheet)):
         registration = excel_sheet.iloc[i, 2]
         arrival_number = excel_sheet.iloc[i, 4]
+        arrival_park = excel_sheet.iloc[i, 10]
         owner = excel_sheet.iloc[i, 13]
         arrival_owner = ", ".join(
             [x for x in ("" if pd.isna(owner) else owner).split(";") if x]
@@ -99,14 +107,8 @@ def get_flight_schedules():
                     "registration": registration,
                     "arrival_number": arrival_number,
                     "arrival_owner": arrival_owner,
+                    "arrival_park": "" if pd.isna(arrival_park) else arrival_park,
                 }
-            )
-
-            logging.info(
-                "Loaded flight schedule: Registration=%s, ArrivalNumber=%s, ArrivalOwner=%s",
-                registration,
-                arrival_number,
-                arrival_owner,
             )
 
     return results
@@ -122,18 +124,26 @@ class FlightFetcher:
         self.last_fetched_flights = utc_now()
         self.client = FlightRadar24API()
 
-    def get_tracking_flights(self):
-        normalized_registrations = [
-            normalize_registration(item["registration"])
-            for item in get_flight_schedules()
-        ]
+    def get_tracking_flights(self, registrations):
         flights = self.client.get_flights(airline="HVN", details=False)
         matched_flights = [
             flight
             for flight in flights
-            if flight.registration in normalized_registrations
+            if flight.registration in registrations
             and flight.destination_airport_iata == "HAN"
         ]
+        unmatched_flights = [flight for flight in flights if flight.registration not in registrations]
+        for flight in unmatched_flights:
+            logging.debug(
+                "Unmatched flight: %s, Registration: %s, ArrivalNumber: %s, From: %s, To: %s, Altitude: %s ft",
+                flight.callsign,
+                flight.registration,
+                flight.number,
+                flight.origin_airport_iata,
+                flight.destination_airport_iata,
+                flight.altitude,
+            )
+
         for flight in matched_flights:
             logging.info(
                 "Matched flight: %s, Registration: %s, ArrivalNumber: %s,  From: %s, To: %s, Altitude: %s ft",
@@ -152,10 +162,17 @@ if __name__ == "__main__":
     try:
         flight_notification_tracker = FlightNotificationTracker()
         hwnd, win = ensure_viber_running()
+        logging.info("hwnd: %s, win: %s", hwnd, win)
+
+        flight_schedule_filepath = get_flight_schedule_filepath()
         flight_fetcher = FlightFetcher()
         while True:
-            flight_schedules = get_flight_schedules()
-            flights = flight_fetcher.get_tracking_flights()
+            flight_schedules = get_flight_schedules(flight_schedule_filepath)
+            normalized_registrations = [
+                normalize_registration(item["registration"])
+                for item in flight_schedules
+            ]
+            flights = flight_fetcher.get_tracking_flights(normalized_registrations)
             flight_notification_tracker.sync(
                 [flight.registration for flight in flights]
             )
@@ -217,7 +234,7 @@ if __name__ == "__main__":
                     descriptions = []
                     owner = flight_schedule["arrival_owner"]
                     if owner:
-                        descriptions.append(f"{owner}")
+                        descriptions.append(f"@{owner}")
 
                     descriptions = descriptions + [
                         f"Flight: *{flight.callsign}*",
@@ -225,6 +242,7 @@ if __name__ == "__main__":
                         f"Registration: *{flight.registration}*",
                         f"From: *{flight.origin_airport_name}*, To: {flight.destination_airport_name}",
                         f"Altitude: *{flight.altitude}* ft, Speed: *{flight.ground_speed}* kts",
+                        f"Arrival Park: *{flight_schedule["arrival_park"]}*"
                     ]
 
                     real_departure_value = flight.time_details.get("real", {}).get(
@@ -285,19 +303,22 @@ if __name__ == "__main__":
                             minutes,
                             THRESHOLD_BEFORE_ARRIVAL_IN_MINS,
                         )
-                        # continue
+                        continue
 
                     descriptions.append(
                         f"Estimate time arrival: *{estimated_arrival.strftime('%Y-%m-%d %H:%M')}*, Time remaining: *{minutes:02d} mins*"
                     )
                     print("\n".join(descriptions))
-                    send_viber_message(GROUP_NAME, descriptions, True)
+                    # send_viber_message(GROUP_NAME, descriptions, False)
                     tracking_registrations.append(flight.registration)
 
             flight_notification_tracker.track(tracking_registrations)
             tracking_registrations.clear()
             logging.info("Sleeping for 1 min before next check...")
             time.sleep(60 * 1)
+    except requests.exceptions.ReadTimeout as e:
+        logging.exception("Failed to read the response. Sleep 1 min before the next attempt")
+        time.sleep(60 * 1)
     except KeyboardInterrupt:
         logging.info("Interrupted by user. Exiting.")
         sys.exit(0)
